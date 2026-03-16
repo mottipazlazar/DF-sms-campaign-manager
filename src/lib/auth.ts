@@ -1,7 +1,7 @@
 import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
-import getDb from './db';
+import { db, ensureDb } from './db';
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -14,21 +14,25 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.username || !credentials?.password) return null;
 
-        const db = getDb();
-        const user = db.prepare('SELECT * FROM users WHERE username = ?').get(credentials.username) as any;
+        await ensureDb();
+        const result = await db.execute({
+          sql: 'SELECT * FROM users WHERE username = ?',
+          args: [credentials.username],
+        });
+        const user = result.rows[0] as any;
 
         if (!user) return null;
 
-        const isValid = await bcrypt.compare(credentials.password, user.password_hash);
+        const isValid = await bcrypt.compare(credentials.password, user.password_hash as string);
         if (!isValid) return null;
 
         return {
           id: String(user.id),
-          name: user.display_name,
-          email: user.username,
-          role: user.role,
-          timezone: user.timezone,
-          tz_label: user.tz_label,
+          name: user.display_name as string,
+          email: user.username as string,
+          role: user.role as string,
+          timezone: user.timezone as string,
+          tz_label: user.tz_label as string,
         };
       },
     }),
@@ -58,7 +62,7 @@ export const authOptions: NextAuthOptions = {
   },
   session: {
     strategy: 'jwt',
-    maxAge: 7 * 24 * 60 * 60, // 7 days
+    maxAge: 7 * 24 * 60 * 60,
   },
   secret: process.env.NEXTAUTH_SECRET,
 };

@@ -1,110 +1,129 @@
-import getDb from './db';
+import { db, ensureDb } from './db';
 import type { AnalyticsData } from './types';
 
-export function getAnalytics(startDate?: string, endDate?: string): AnalyticsData {
-  const db = getDb();
+export async function getAnalytics(startDate?: string, endDate?: string): Promise<AnalyticsData> {
+  await ensureDb();
 
-  let dateFilter = '';
-  const params: any[] = [];
+  const hasDateFilter = !!(startDate && endDate);
+  const dateArgs = hasDateFilter ? [startDate!, endDate!] : [];
 
-  if (startDate && endDate) {
-    dateFilter = 'WHERE b.planned_date >= ? AND b.planned_date <= ?';
-    params.push(startDate, endDate);
-  }
+  const where = (extra: string) =>
+    hasDateFilter
+      ? `WHERE b.planned_date >= ? AND b.planned_date <= ? AND ${extra}`
+      : `WHERE ${extra}`;
 
   // Totals
-  const totals = db.prepare(`
-    SELECT
-      COUNT(*) as totalBatches,
-      COALESCE(SUM(message_count), 0) as totalMessages,
-      COALESCE(SUM(reply_count), 0) as totalReplies,
-      COALESCE(AVG(conversion_rate), 0) as avgConversionRate
-    FROM batches b
-    ${dateFilter}
-    ${dateFilter ? 'AND' : 'WHERE'} conversion_rate IS NOT NULL
-  `).get(...params) as any;
+  const totalsResult = await db.execute({
+    sql: `
+      SELECT
+        COUNT(*) as totalBatches,
+        COALESCE(SUM(message_count), 0) as totalMessages,
+        COALESCE(SUM(reply_count), 0) as totalReplies,
+        COALESCE(AVG(conversion_rate), 0) as avgConversionRate
+      FROM batches b
+      ${where('conversion_rate IS NOT NULL')}
+    `,
+    args: dateArgs,
+  });
+  const totals = totalsResult.rows[0] as any;
 
-  // Best send times (by local target time hour)
-  const bestSendTimes = db.prepare(`
-    SELECT
-      substr(local_target_time, 1, 2) || ':00' as time,
-      AVG(conversion_rate) as avg_rate,
-      COUNT(*) as count
-    FROM batches b
-    ${dateFilter}
-    ${dateFilter ? 'AND' : 'WHERE'} conversion_rate IS NOT NULL
-    GROUP BY substr(local_target_time, 1, 2)
-    ORDER BY avg_rate DESC
-    LIMIT 5
-  `).all(...params) as any[];
+  // Best send times
+  const bestResult = await db.execute({
+    sql: `
+      SELECT
+        substr(local_target_time, 1, 2) || ':00' as time,
+        AVG(conversion_rate) as avg_rate,
+        COUNT(*) as count
+      FROM batches b
+      ${where('conversion_rate IS NOT NULL')}
+      GROUP BY substr(local_target_time, 1, 2)
+      ORDER BY avg_rate DESC
+      LIMIT 5
+    `,
+    args: dateArgs,
+  });
+  const bestSendTimes = bestResult.rows as any[];
 
   // Worst send times
-  const worstSendTimes = db.prepare(`
-    SELECT
-      substr(local_target_time, 1, 2) || ':00' as time,
-      AVG(conversion_rate) as avg_rate,
-      COUNT(*) as count
-    FROM batches b
-    ${dateFilter}
-    ${dateFilter ? 'AND' : 'WHERE'} conversion_rate IS NOT NULL
-    GROUP BY substr(local_target_time, 1, 2)
-    HAVING COUNT(*) >= 1
-    ORDER BY avg_rate ASC
-    LIMIT 5
-  `).all(...params) as any[];
+  const worstResult = await db.execute({
+    sql: `
+      SELECT
+        substr(local_target_time, 1, 2) || ':00' as time,
+        AVG(conversion_rate) as avg_rate,
+        COUNT(*) as count
+      FROM batches b
+      ${where('conversion_rate IS NOT NULL')}
+      GROUP BY substr(local_target_time, 1, 2)
+      HAVING COUNT(*) >= 1
+      ORDER BY avg_rate ASC
+      LIMIT 5
+    `,
+    args: dateArgs,
+  });
+  const worstSendTimes = worstResult.rows as any[];
 
   // Top counties
-  const topCounties = db.prepare(`
-    SELECT
-      c.county,
-      AVG(b.conversion_rate) as avg_rate,
-      COUNT(*) as total_batches
-    FROM batches b
-    JOIN campaigns c ON b.campaign_id = c.id
-    ${dateFilter ? 'WHERE b.planned_date >= ? AND b.planned_date <= ?' : ''}
-    ${dateFilter ? 'AND' : 'WHERE'} b.conversion_rate IS NOT NULL
-    GROUP BY c.county
-    ORDER BY avg_rate DESC
-    LIMIT 10
-  `).all(...params) as any[];
+  const countiesResult = await db.execute({
+    sql: `
+      SELECT
+        c.county,
+        AVG(b.conversion_rate) as avg_rate,
+        COUNT(*) as total_batches
+      FROM batches b
+      JOIN campaigns c ON b.campaign_id = c.id
+      ${where('b.conversion_rate IS NOT NULL')}
+      GROUP BY c.county
+      ORDER BY avg_rate DESC
+      LIMIT 10
+    `,
+    args: dateArgs,
+  });
+  const topCounties = countiesResult.rows as any[];
 
   // Top templates
-  const topTemplates = db.prepare(`
-    SELECT
-      template,
-      AVG(conversion_rate) as avg_rate,
-      COUNT(*) as total_batches
-    FROM batches b
-    ${dateFilter}
-    ${dateFilter ? 'AND' : 'WHERE'} conversion_rate IS NOT NULL
-    GROUP BY template
-    ORDER BY avg_rate DESC
-    LIMIT 10
-  `).all(...params) as any[];
+  const templatesResult = await db.execute({
+    sql: `
+      SELECT
+        template,
+        AVG(conversion_rate) as avg_rate,
+        COUNT(*) as total_batches
+      FROM batches b
+      ${where('conversion_rate IS NOT NULL')}
+      GROUP BY template
+      ORDER BY avg_rate DESC
+      LIMIT 10
+    `,
+    args: dateArgs,
+  });
+  const topTemplates = templatesResult.rows as any[];
 
   // Daily performance
-  const dailyPerformance = db.prepare(`
-    SELECT
-      planned_date as date,
-      SUM(message_count) as messages,
-      COALESCE(SUM(reply_count), 0) as replies,
-      COALESCE(AVG(conversion_rate), 0) as rate
-    FROM batches b
-    ${dateFilter}
-    GROUP BY planned_date
-    ORDER BY planned_date DESC
-    LIMIT 30
-  `).all(...params) as any[];
+  const dailyResult = await db.execute({
+    sql: `
+      SELECT
+        planned_date as date,
+        SUM(message_count) as messages,
+        COALESCE(SUM(reply_count), 0) as replies,
+        COALESCE(AVG(conversion_rate), 0) as rate
+      FROM batches b
+      ${hasDateFilter ? 'WHERE b.planned_date >= ? AND b.planned_date <= ?' : ''}
+      GROUP BY planned_date
+      ORDER BY planned_date DESC
+      LIMIT 30
+    `,
+    args: dateArgs,
+  });
+  const dailyPerformance = [...dailyResult.rows].reverse() as any[];
 
   return {
-    totalBatches: totals?.totalBatches || 0,
-    totalMessages: totals?.totalMessages || 0,
-    totalReplies: Math.round(totals?.totalReplies || 0),
-    avgConversionRate: Math.round((totals?.avgConversionRate || 0) * 100) / 100,
+    totalBatches: Number(totals?.totalBatches) || 0,
+    totalMessages: Number(totals?.totalMessages) || 0,
+    totalReplies: Math.round(Number(totals?.totalReplies) || 0),
+    avgConversionRate: Math.round((Number(totals?.avgConversionRate) || 0) * 100) / 100,
     bestSendTimes,
     worstSendTimes,
     topCounties,
     topTemplates,
-    dailyPerformance: dailyPerformance.reverse(),
+    dailyPerformance,
   };
 }

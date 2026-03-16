@@ -1,22 +1,19 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import { createClient } from '@libsql/client';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'sms-campaign.db');
-
-let db: Database.Database;
-
-function getDb(): Database.Database {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-    initializeDb(db);
-  }
-  return db;
+if (!process.env.TURSO_DATABASE_URL) {
+  throw new Error('TURSO_DATABASE_URL environment variable is not set');
 }
 
-function initializeDb(database: Database.Database) {
-  database.exec(`
+export const db = createClient({
+  url: process.env.TURSO_DATABASE_URL!,
+  authToken: process.env.TURSO_AUTH_TOKEN,
+});
+
+let initialized = false;
+
+export async function ensureDb(): Promise<void> {
+  if (initialized) return;
+  await db.executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
@@ -27,7 +24,6 @@ function initializeDb(database: Database.Database) {
       tz_label TEXT NOT NULL DEFAULT 'ET',
       created_at TEXT DEFAULT (datetime('now'))
     );
-
     CREATE TABLE IF NOT EXISTS campaigns (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -37,7 +33,6 @@ function initializeDb(database: Database.Database) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
-
     CREATE TABLE IF NOT EXISTS batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       campaign_id INTEGER NOT NULL,
@@ -57,7 +52,6 @@ function initializeDb(database: Database.Database) {
       FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
       FOREIGN KEY (owner_id) REFERENCES users(id)
     );
-
     CREATE TABLE IF NOT EXISTS settings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       key TEXT NOT NULL,
@@ -65,6 +59,5 @@ function initializeDb(database: Database.Database) {
       category TEXT NOT NULL CHECK(category IN ('county', 'state', 'template', 'general'))
     );
   `);
+  initialized = true;
 }
-
-export default getDb;

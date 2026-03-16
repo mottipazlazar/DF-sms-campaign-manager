@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import getDb from '@/lib/db';
+import { db, ensureDb } from '@/lib/db';
 
 export async function GET() {
-  const db = getDb();
-  const campaigns = db.prepare(`
+  await ensureDb();
+  const result = await db.execute(`
     SELECT c.*,
       (SELECT COUNT(*) FROM batches WHERE campaign_id = c.id) as batch_count,
       (SELECT COALESCE(AVG(conversion_rate), 0) FROM batches WHERE campaign_id = c.id AND conversion_rate IS NOT NULL) as avg_conversion
     FROM campaigns c
     ORDER BY c.updated_at DESC
-  `).all();
-  return NextResponse.json(campaigns);
+  `);
+  return NextResponse.json(result.rows);
 }
 
 export async function POST(req: NextRequest) {
-  const db = getDb();
+  await ensureDb();
   const body = await req.json();
   const { name, county, state } = body;
 
@@ -22,10 +22,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Name, county, and state are required' }, { status: 400 });
   }
 
-  const result = db.prepare(
-    'INSERT INTO campaigns (name, county, state) VALUES (?, ?, ?)'
-  ).run(name, county, state);
+  const insertResult = await db.execute({
+    sql: 'INSERT INTO campaigns (name, county, state) VALUES (?, ?, ?)',
+    args: [name, county, state],
+  });
 
-  const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(result.lastInsertRowid);
-  return NextResponse.json(campaign, { status: 201 });
+  const campaignResult = await db.execute({
+    sql: 'SELECT * FROM campaigns WHERE id = ?',
+    args: [Number(insertResult.lastInsertRowid)],
+  });
+
+  return NextResponse.json(campaignResult.rows[0], { status: 201 });
 }

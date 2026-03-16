@@ -6,6 +6,6 @@ export async function GET(req: NextRequest) {
   const startDate = searchParams.get('start_date') || undefined;
   const endDate = searchParams.get('end_date') || undefined;
 
-  const data = getAnalytics(startDate, endDate);
+  const data = await getAnalytics(startDate, endDate);
   return NextResponse.json(data);
 }
