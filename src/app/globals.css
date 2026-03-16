@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ethereal Font Family */
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-Thin.ttf') format('truetype'); font-weight: 100; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-ExtraLight.ttf') format('truetype'); font-weight: 200; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-Light.ttf') format('truetype'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-Medium.ttf') format('truetype'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-SemiBold.ttf') format('truetype'); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-ExtraBold.ttf') format('truetype'); font-weight: 800; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Ethereal'; src: url('/fonts/Ethereal-Black.ttf') format('truetype'); font-weight: 900; font-style: normal; font-display: swap; }
+
+/* Neue Montreal Font Family */
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-LightItalic.otf') format('opentype'); font-weight: 300; font-style: italic; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-Italic.otf') format('opentype'); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-MediumItalic.otf') format('opentype'); font-weight: 500; font-style: italic; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Neue Montreal'; src: url('/fonts/NeueMontreal-BoldItalic.otf') format('opentype'); font-weight: 700; font-style: italic; font-display: swap; }
+
+@layer base {
+  body {
+    @apply bg-brand-white text-brand-taupe font-body antialiased;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-brand-pine hover:bg-brand-pine-dark text-white font-body font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+  }
+  .btn-secondary {
+    @apply bg-brand-taupe hover:bg-brand-taupe-dark text-white font-body font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+  }
+  .btn-accent {
+    @apply bg-brand-gold hover:bg-brand-gold-dark text-white font-body font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+  }
+  .btn-outline {
+    @apply border border-brand-pine text-brand-pine hover:bg-brand-pine hover:text-white font-body font-medium px-4 py-2 rounded-lg transition-colors duration-200;
+  }
+  .card {
+    @apply bg-brand-ivory rounded-xl border border-brand-taupe/10 p-6 shadow-sm;
+  }
+  .input-field {
+    @apply w-full px-3 py-2 border border-brand-taupe/20 rounded-lg bg-white font-body text-sm focus:outline-none focus:ring-2 focus:ring-brand-pine/30 focus:border-brand-pine transition-colors;
+  }
+  .select-field {
+    @apply w-full px-3 py-2 border border-brand-taupe/20 rounded-lg bg-white font-body text-sm focus:outline-none focus:ring-2 focus:ring-brand-pine/30 focus:border-brand-pine transition-colors appearance-none;
+  }
+  .table-header {
+    @apply bg-brand-pine text-white font-body text-xs font-medium uppercase tracking-wider px-4 py-3 text-left;
+  }
+  .table-cell {
+    @apply px-4 py-3 font-body text-sm border-b border-brand-taupe/10;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #F6F4E3; }
+::-webkit-scrollbar-thumb { background: #635752; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3F6B55; }
