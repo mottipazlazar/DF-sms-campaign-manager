@@ -24,9 +24,7 @@ npm-debug.log*
 .env*.local
 
 # database
-/data/*.db
-/data/*.db-wal
-/data/*.db-shm
+/data/
 
 # typescript
 *.tsbuildinfo
