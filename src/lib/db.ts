@@ -59,5 +59,21 @@ export async function ensureDb(): Promise<void> {
       category TEXT NOT NULL CHECK(category IN ('county', 'state', 'template', 'general'))
     );
   `);
+
+  // Migration: add skipped column to existing tables
+  try {
+    await db.execute('ALTER TABLE batches ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0');
+  } catch { /* column already exists — safe to ignore */ }
+
+  // Seed default send-time quality settings if not yet present
+  const optCheck = await db.execute({ sql: "SELECT id FROM settings WHERE key='optimal_hours' AND category='general'", args: [] });
+  if (optCheck.rows.length === 0) {
+    await db.execute({ sql: "INSERT INTO settings (key,value,category) VALUES ('optimal_hours','[[8,9],[10,12],[17,19]]','general')", args: [] });
+  }
+  const goodCheck = await db.execute({ sql: "SELECT id FROM settings WHERE key='good_hours' AND category='general'", args: [] });
+  if (goodCheck.rows.length === 0) {
+    await db.execute({ sql: "INSERT INTO settings (key,value,category) VALUES ('good_hours','[[9,10],[12,14],[16,17]]','general')", args: [] });
+  }
+
   initialized = true;
 }

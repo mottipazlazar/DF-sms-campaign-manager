@@ -22,6 +22,7 @@ interface PlannerBatch {
   reply_count: number | null;
   planned_date: string;
   notes: string;
+  skipped: number;
 }
 
 interface Toast {
@@ -29,6 +30,8 @@ interface Toast {
   message: string;
   type: 'success' | 'info';
 }
+
+type TimeRange = [number, number];
 
 const STATE_TZ_MAP: Record<string, string> = {
   AL:'America/Chicago',AK:'America/Anchorage',AZ:'America/Phoenix',AR:'America/Chicago',
@@ -48,6 +51,10 @@ const STATE_TZ_MAP: Record<string, string> = {
 
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 6); // 6am–9pm
 
+function formatRanges(ranges: TimeRange[]): string {
+  return ranges.map(([s, e]) => `${formatHour(s)}–${formatHour(e)}`).join(', ');
+}
+
 export default function PlannerPage() {
   const { data: session } = useSession();
   const [batches, setBatches] = useState<PlannerBatch[]>([]);
@@ -59,6 +66,10 @@ export default function PlannerPage() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
+
+  // Time quality ranges — loaded from settings, fallback to defaults
+  const [optimalRanges, setOptimalRanges] = useState<TimeRange[]>([[8,9],[10,12],[17,19]]);
+  const [goodRanges, setGoodRanges] = useState<TimeRange[]>([[9,10],[12,14],[16,17]]);
 
   // Time converter widget state
   const [convCounty, setConvCounty] = useState('');
@@ -100,12 +111,18 @@ export default function PlannerPage() {
 
   useEffect(() => { fetchAll(); }, [startDate, endDate]);
 
-  // Load counties once on mount
+  // Load counties + time settings once on mount
   useEffect(() => {
     fetch('/api/settings?category=county').then(r => r.json()).then((data: any[]) => {
       const locs = data.map(d => ({ county: d.key, state: d.value }));
       setCounties(locs);
       if (locs.length > 0 && !convCounty) setConvCounty(locs[0].county);
+    });
+    fetch('/api/settings?category=general').then(r => r.json()).then((data: any[]) => {
+      const opt = data.find((d: any) => d.key === 'optimal_hours');
+      const good = data.find((d: any) => d.key === 'good_hours');
+      if (opt) { try { setOptimalRanges(JSON.parse(opt.value)); } catch {} }
+      if (good) { try { setGoodRanges(JSON.parse(good.value)); } catch {} }
     });
   }, []);
 
@@ -209,7 +226,6 @@ export default function PlannerPage() {
   };
 
   const duplicateBatch = async (batch: PlannerBatch, idx: number) => {
-    // Next day in the week, or same day if last
     const currentIdx = weekDates.indexOf(batch.planned_date);
     const nextDate = weekDates[Math.min(currentIdx + 1, 6)];
     await fetch('/api/batches', {
@@ -257,6 +273,26 @@ export default function PlannerPage() {
     );
   };
 
+  const markSkipped = async (batch: PlannerBatch) => {
+    await fetch('/api/batches', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: batch.id, skipped: 1 }),
+    });
+    await fetchAll();
+    showToast(`Batch #${batch.batch_number} marked as skipped`, 'info');
+  };
+
+  const unmarkSkipped = async (batch: PlannerBatch) => {
+    await fetch('/api/batches', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: batch.id, skipped: 0 }),
+    });
+    await fetchAll();
+    showToast(`Batch #${batch.batch_number} restored`, 'success');
+  };
+
   // Drag handlers
   const handleDragStart = (e: React.DragEvent, batchId: number) => {
     draggingBatchId.current = batchId;
@@ -286,15 +322,24 @@ export default function PlannerPage() {
     showToast(`Batch moved to ${new Date(targetDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${formatHour(targetHour)}`, 'info');
   };
 
-  const getTimeQuality = useCallback((time: string, state: string): 'optimal' | 'good' | 'neutral' => {
-    const h = parseInt(time.split(':')[0]);
-    if ((h >= 8 && h < 9) || (h >= 10 && h < 12) || (h >= 17 && h < 19)) return 'optimal';
-    if ((h >= 9 && h < 10) || (h >= 12 && h < 14) || (h >= 16 && h < 17)) return 'good';
-    return 'neutral';
-  }, []);
+  // Batch state helpers
+  const isSkipped = (b: PlannerBatch) => b.skipped === 1;
+  const isDone = (b: PlannerBatch) => !isSkipped(b) && b.conversion_rate != null && b.actual_send_time != null;
+  const isLate = (b: PlannerBatch) => isDone(b) && b.actual_send_time != null && b.actual_send_time !== b.local_target_time;
 
-  const qualityStyle = (q: 'optimal' | 'good' | 'neutral', done: boolean) => {
-    if (done) return 'border-l-emerald-600 bg-emerald-50 border-emerald-200';
+  // Dynamic time quality — uses ranges loaded from settings
+  const getTimeQuality = useCallback((time: string): 'optimal' | 'good' | 'neutral' => {
+    const h = parseInt(time.split(':')[0]);
+    if (optimalRanges.some(([s, e]) => h >= s && h < e)) return 'optimal';
+    if (goodRanges.some(([s, e]) => h >= s && h < e)) return 'good';
+    return 'neutral';
+  }, [optimalRanges, goodRanges]);
+
+  // Card visual style based on batch state
+  const cardStyle = (b: PlannerBatch, q: 'optimal' | 'good' | 'neutral') => {
+    if (isSkipped(b)) return 'border-l-gray-600 bg-gray-50 border-gray-400 border-2 opacity-60';
+    if (isLate(b)) return 'border-l-red-500 bg-red-50/50 border-red-300 border-2';
+    if (isDone(b)) return 'border-l-emerald-600 bg-emerald-50 border-emerald-200';
     if (q === 'optimal') return 'border-l-emerald-500 bg-emerald-50/60 border-blue-200';
     if (q === 'good') return 'border-l-amber-400 bg-amber-50/60 border-blue-200';
     return 'border-l-slate-300 bg-slate-50/60 border-blue-200';
@@ -306,8 +351,6 @@ export default function PlannerPage() {
     return 'bg-slate-300';
   };
 
-  const isDone = (b: PlannerBatch) => b.conversion_rate != null && b.actual_send_time != null;
-
   const formatWeekRange = () => {
     const s = new Date(startDate + 'T12:00:00');
     const e = new Date(endDate + 'T12:00:00');
@@ -318,10 +361,9 @@ export default function PlannerPage() {
   const today = new Date().toISOString().split('T')[0];
   const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-  // Time converter: my TZ (session user) → county's local TZ
+  // Time converter
   const convSelectedCounty = counties.find(c => c.county === convCounty);
   const convStateTz = convSelectedCounty ? (STATE_TZ_MAP[convSelectedCounty.state] || 'America/New_York') : null;
-  // Use session user's TZ (pulled from their user record)
   const sessionUserTz = useMemo(() => {
     if (!session?.user) return 'America/New_York';
     const su = users.find(u => u.username === (session.user as any).username || u.display_name === session.user?.name);
@@ -336,19 +378,15 @@ export default function PlannerPage() {
     const refDate = new Date(`${today}T${String(convHour).padStart(2,'0')}:00:00Z`);
     const myOffset = getOffset(sessionUserTz, refDate);
     const countyOffset = getOffset(convStateTz, refDate);
-    // myToCounty: diff = county - my  |  countyToMy: diff = my - county
     const diff = convDirection === 'myToCounty' ? countyOffset - myOffset : myOffset - countyOffset;
     const total = convHour * 60 + diff;
     let rh = Math.floor(total / 60) % 24;
     if (rh < 0) rh += 24;
     const shift = total >= 24 * 60 ? ' +1d' : total < 0 ? ' -1d' : '';
-    // Quality ALWAYS reflects the county local time, regardless of direction
-    // myToCounty → county time is rh (the output)
-    // countyToMy → county time is convHour (the input)
     const countyLocalHour = convDirection === 'myToCounty' ? rh : convHour;
-    const quality = getTimeQuality(`${String(countyLocalHour).padStart(2,'0')}:00`, convSelectedCounty?.state || '');
+    const quality = getTimeQuality(`${String(countyLocalHour).padStart(2,'00')}:00`);
     return { time: formatHour(rh) + shift, quality, countyIsResult: convDirection === 'myToCounty' };
-  }, [convHour, convStateTz, sessionUserTz, convDirection, today]);
+  }, [convHour, convStateTz, sessionUserTz, convDirection, today, getTimeQuality]);
 
   return (
     <div className="h-full flex flex-col relative">
@@ -374,9 +412,8 @@ export default function PlannerPage() {
         {/* Time Converter Widget */}
         {counties.length > 0 && users.length > 0 && (
           <div className="flex items-center gap-2 bg-brand-ivory border border-brand-taupe/15 rounded-xl px-3 py-2 flex-shrink-0">
-            <span className="text-[11px] font-body font-semibold text-brand-taupe/50 uppercase tracking-wide mr-1" title="Quick time converter between your timezone and county local time">TZ Check</span>
+            <span className="text-[11px] font-body font-semibold text-brand-taupe/50 uppercase tracking-wide mr-1">TZ Check</span>
 
-            {/* Left side: input (source) — when countyToMy, this IS the county time → show quality here */}
             <div className={`flex flex-col items-center px-1.5 py-0.5 rounded-lg ${
               convResult && !convResult.countyIsResult
                 ? convResult.quality === 'optimal' ? 'bg-emerald-50 border border-emerald-200'
@@ -397,11 +434,9 @@ export default function PlannerPage() {
                 value={convHour}
                 onChange={e => setConvHour(Number(e.target.value))}
                 className="text-xs font-body font-semibold text-brand-taupe bg-white border border-brand-taupe/20 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-pine"
-                title={convDirection === 'myToCounty' ? 'Your time to convert' : 'County local time to convert'}
               >
                 {HOURS.map(h => <option key={h} value={h}>{formatHour(h)}</option>)}
               </select>
-              {/* Quality badge on input side when county time is the input */}
               {convResult && !convResult.countyIsResult && (
                 <span className={`text-[9px] font-body capitalize mt-0.5 ${
                   convResult.quality === 'optimal' ? 'text-emerald-500'
@@ -411,24 +446,21 @@ export default function PlannerPage() {
               )}
             </div>
 
-            {/* Swap button */}
             <button
               onClick={() => setConvDirection(d => d === 'myToCounty' ? 'countyToMy' : 'myToCounty')}
               className="flex flex-col items-center text-brand-taupe/40 hover:text-brand-pine transition-colors group"
-              title={convDirection === 'myToCounty' ? 'Switch: show county → my time' : 'Switch: show my → county time'}
+              title="Swap direction"
             >
               <span className="text-[8px] font-body mb-0.5 opacity-0 group-hover:opacity-100 transition-opacity">swap</span>
               <span className="text-base leading-none">⇄</span>
             </button>
 
-            {/* County selector */}
             <div className="flex flex-col items-center">
               <span className="text-[9px] font-body text-brand-taupe/40 mb-0.5">County</span>
               <select
                 value={convCounty}
                 onChange={e => setConvCounty(e.target.value)}
                 className="text-xs font-body font-semibold text-brand-taupe bg-white border border-brand-taupe/20 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-pine"
-                title="Select county"
               >
                 {counties.map(c => <option key={c.county} value={c.county}>{c.county}, {c.state}</option>)}
               </select>
@@ -436,7 +468,6 @@ export default function PlannerPage() {
 
             <span className="text-brand-taupe/30 text-sm">→</span>
 
-            {/* Result — quality coloring only when county time is on this side (myToCounty) */}
             {convResult && (
               <div className={`flex flex-col items-center min-w-[56px] px-2.5 py-1 rounded-lg border ${
                 convResult.countyIsResult
@@ -455,7 +486,6 @@ export default function PlannerPage() {
                     :                                   'text-slate-600'
                     : 'text-brand-taupe'
                 }`}>{convResult.time}</span>
-                {/* Quality label only when this is the county-local side */}
                 {convResult.countyIsResult && (
                   <span className={`text-[9px] font-body capitalize ${
                     convResult.quality === 'optimal' ? 'text-emerald-500' :
@@ -469,19 +499,20 @@ export default function PlannerPage() {
         )}
 
         <div className="flex items-center gap-2">
-          <button onClick={() => setWeekOffset(w => w - 1)} className="btn-outline text-sm px-3" title="Previous week">← Prev</button>
-          <button onClick={() => setWeekOffset(0)} className="btn-secondary text-sm px-3" title="Jump to current week">This Week</button>
-          <button onClick={() => setWeekOffset(w => w + 1)} className="btn-outline text-sm px-3" title="Next week">Next →</button>
+          <button onClick={() => setWeekOffset(w => w - 1)} className="btn-outline text-sm px-3">← Prev</button>
+          <button onClick={() => setWeekOffset(0)} className="btn-secondary text-sm px-3">This Week</button>
+          <button onClick={() => setWeekOffset(w => w + 1)} className="btn-outline text-sm px-3">Next →</button>
         </div>
       </div>
 
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-4 mb-3 text-xs font-body flex-shrink-0">
-        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Optimal (8–9am, 10am–12pm, 5–7pm)</span>
-        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Good (9–10am, 12–2pm, 4–5pm)</span>
+        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Optimal ({formatRanges(optimalRanges)})</span>
+        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Good ({formatRanges(goodRanges)})</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-blue-400 bg-blue-50"></span> Planned</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-emerald-600 bg-emerald-100"></span> Done</span>
-        <span className="flex items-center gap-1.5 text-brand-taupe/50">Drag cards to move · Hover cell → <kbd className="bg-brand-taupe/10 px-1 rounded text-[10px]">+</kbd> to add</span>
+        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-[2px] border-red-400 bg-red-50"></span> Late send</span>
+        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-gray-500 bg-gray-100 opacity-60"></span> Skipped</span>
       </div>
 
       {loading ? (
@@ -489,7 +520,6 @@ export default function PlannerPage() {
       ) : (
         <div className="flex-1 overflow-auto border border-brand-taupe/15 rounded-xl bg-white">
           <table className="w-full border-collapse" style={{ tableLayout: 'fixed' }}>
-            {/* Day Headers */}
             <thead className="sticky top-0 z-20 bg-white">
               <tr>
                 <th className="w-14 border-b border-r border-brand-taupe/15 bg-brand-ivory px-1 py-2 text-[10px] font-body font-semibold text-brand-taupe/40 text-center">TIME</th>
@@ -507,21 +537,18 @@ export default function PlannerPage() {
               </tr>
             </thead>
 
-            {/* Time Grid */}
             <tbody>
               {HOURS.map(hour => {
-                const isOptimal = (hour >= 8 && hour < 9) || (hour >= 10 && hour < 12) || (hour >= 17 && hour < 19);
-                const isGood = (hour >= 9 && hour < 10) || (hour >= 12 && hour < 14) || (hour >= 16 && hour < 17);
+                const isOptimal = optimalRanges.some(([s, e]) => hour >= s && hour < e);
+                const isGood = goodRanges.some(([s, e]) => hour >= s && hour < e);
                 return (
                   <tr key={hour} className={isOptimal ? 'bg-emerald-50/25' : isGood ? 'bg-amber-50/15' : ''}>
-                    {/* Time label */}
                     <td className="border-b border-r border-brand-taupe/10 px-1 py-1.5 text-center align-top">
                       <span className={`text-[11px] font-body font-semibold ${isOptimal ? 'text-emerald-600' : isGood ? 'text-amber-600' : 'text-brand-taupe/35'}`}>
                         {formatHour(hour)}
                       </span>
                     </td>
 
-                    {/* Day cells */}
                     {weekDates.map((date) => {
                       const isToday = date === today;
                       const cellBatches = batchGrid[date]?.[hour] || [];
@@ -535,44 +562,58 @@ export default function PlannerPage() {
                           <div className="space-y-1 min-h-[44px]">
                             {cellBatches.map((batch) => {
                               const done = isDone(batch);
-                              const quality = getTimeQuality(batch.local_target_time, batch.state);
+                              const skipped = isSkipped(batch);
+                              const late = isLate(batch);
+                              const quality = getTimeQuality(batch.local_target_time);
+                              const actualHour = batch.actual_send_time ? parseInt(batch.actual_send_time.split(':')[0]) : null;
+
                               return (
                                 <div
                                   key={batch.id}
-                                  draggable={!done}
+                                  draggable={!done && !skipped}
                                   onDragStart={(e) => handleDragStart(e, batch.id)}
                                   onClick={(e) => e.stopPropagation()}
-                                  className={`rounded-md border-l-[3px] border px-2 py-1.5 text-[11px] font-body transition-all hover:shadow-md ${done ? '' : 'cursor-grab active:cursor-grabbing'} ${qualityStyle(quality, done)} group/card`}
-                                  title={done ? 'Batch completed' : 'Drag to move to a different time/day'}
+                                  className={`rounded-md border-l-[3px] px-2 py-1.5 text-[11px] font-body transition-all hover:shadow-md ${!done && !skipped ? 'cursor-grab active:cursor-grabbing' : ''} ${cardStyle(batch, quality)} group/card`}
                                 >
-                                  {/* Row 1: Status badge + time + quality dot + actions */}
+                                  {/* Row 1: Status badge + time + actions */}
                                   <div className="flex items-center justify-between gap-1">
-                                    <div className="flex items-center gap-1.5">
-                                      {done ? (
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {skipped ? (
+                                        <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-gray-600 text-white">Skip</span>
+                                      ) : late ? (
+                                        <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-red-500 text-white flex items-center gap-0.5">⚠ Late</span>
+                                      ) : done ? (
                                         <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-emerald-600 text-white">Done</span>
                                       ) : (
                                         <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-blue-500 text-white">Plan</span>
                                       )}
                                       <span className="font-medium text-brand-taupe">{formatHour(hour)}</span>
-                                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${qualityDot(quality)}`} title={`${quality} window`}></span>
+                                      {!skipped && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${qualityDot(quality)}`} title={`${quality} window`}></span>}
+                                      {/* Late: show actual send time prominently */}
+                                      {late && actualHour !== null && (
+                                        <span className="text-[9px] font-semibold text-red-600 bg-red-100 px-1 rounded">
+                                          sent {formatHour(actualHour)}
+                                        </span>
+                                      )}
                                     </div>
                                     <div className="flex items-center gap-0.5 opacity-0 group-hover/card:opacity-100 transition-opacity">
-                                      {!done && (
-                                        <button
-                                          onClick={(e) => { e.stopPropagation(); setCompletingBatch(batch); setCompleteForm({ lc_batch_id: batch.lc_batch_id || '', actual_send_hour: hour, conversion_rate: '' }); }}
-                                          className="hover:scale-110 transition-transform text-[10px]"
-                                          title="Mark as Done — enter results"
-                                        >✅</button>
-                                      )}
-                                      <button onClick={(e) => { e.stopPropagation(); openEditBatch(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Edit batch details">✏️</button>
-                                      <button onClick={(e) => { e.stopPropagation(); duplicateBatch(batch, weekDates.indexOf(date)); }} className="hover:scale-110 transition-transform text-[10px]" title="Duplicate to next day">📋</button>
-                                      <button onClick={(e) => { e.stopPropagation(); deleteBatch(batch.id); }} className="hover:scale-110 transition-transform text-[10px]" title="Delete batch">🗑️</button>
+                                      {skipped ? (
+                                        <button onClick={(e) => { e.stopPropagation(); unmarkSkipped(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Restore batch">↩️</button>
+                                      ) : !done ? (
+                                        <>
+                                          <button onClick={(e) => { e.stopPropagation(); setCompletingBatch(batch); setCompleteForm({ lc_batch_id: batch.lc_batch_id || '', actual_send_hour: hour, conversion_rate: '' }); }} className="hover:scale-110 transition-transform text-[10px]" title="Mark as Done">✅</button>
+                                          <button onClick={(e) => { e.stopPropagation(); markSkipped(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Mark as Skipped">⊘</button>
+                                        </>
+                                      ) : null}
+                                      <button onClick={(e) => { e.stopPropagation(); openEditBatch(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Edit batch">✏️</button>
+                                      <button onClick={(e) => { e.stopPropagation(); duplicateBatch(batch, weekDates.indexOf(date)); }} className="hover:scale-110 transition-transform text-[10px]" title="Duplicate">📋</button>
+                                      <button onClick={(e) => { e.stopPropagation(); deleteBatch(batch.id); }} className="hover:scale-110 transition-transform text-[10px]" title="Delete">🗑️</button>
                                     </div>
                                   </div>
 
                                   {/* Row 2: Campaign + Template */}
                                   <div className="mt-1">
-                                    <p className="font-semibold text-brand-taupe truncate" title={batch.campaign_name}>{batch.campaign_name}</p>
+                                    <p className={`font-semibold truncate ${skipped ? 'text-gray-500 line-through' : 'text-brand-taupe'}`} title={batch.campaign_name}>{batch.campaign_name}</p>
                                     <p className="text-brand-taupe/55 truncate" title={batch.template}>{batch.template.replace(/NewLandWS_|_/g, ' ').trim()}</p>
                                   </div>
 
@@ -582,28 +623,30 @@ export default function PlannerPage() {
                                     <span className="font-medium text-brand-taupe">{batch.owner_name}</span>
                                   </div>
 
-                                  {/* Row 4: TZ conversions — always visible */}
-                                  <div className="mt-1 pt-1 border-t border-brand-taupe/10">
-                                    {users.map(u => (
-                                      <div key={u.id} className="flex justify-between text-[9px] text-brand-taupe/45">
-                                        <span>{u.display_name} ({u.tz_label})</span>
-                                        <span className="font-medium">{convertTimeSimple(batch.local_target_time, batch.planned_date, u.timezone)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
+                                  {/* Row 4: TZ conversions */}
+                                  {!skipped && (
+                                    <div className="mt-1 pt-1 border-t border-brand-taupe/10">
+                                      {users.map(u => (
+                                        <div key={u.id} className="flex justify-between text-[9px] text-brand-taupe/45">
+                                          <span>{u.display_name} ({u.tz_label})</span>
+                                          <span className="font-medium">{convertTimeSimple(batch.local_target_time, batch.planned_date, u.timezone)}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
 
                                   {/* Row 5: Results if done */}
                                   {done && (
-                                    <div className="mt-1 pt-1 border-t border-emerald-200 flex items-center justify-between text-[10px] group/results">
-                                      <span className="text-emerald-700 font-medium">{batch.conversion_rate}% conv</span>
-                                      <span className="text-emerald-700 font-medium">{Math.round(batch.reply_count || 0)} replies</span>
+                                    <div className={`mt-1 pt-1 border-t ${late ? 'border-red-200' : 'border-emerald-200'} flex items-center justify-between text-[10px] group/results`}>
+                                      <span className={`font-medium ${late ? 'text-red-700' : 'text-emerald-700'}`}>{batch.conversion_rate}% conv</span>
+                                      <span className={`font-medium ${late ? 'text-red-700' : 'text-emerald-700'}`}>{Math.round(batch.reply_count || 0)} replies</span>
                                       {batch.lc_batch_id && <span className="text-emerald-600/60">LC#{batch.lc_batch_id}</span>}
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          const actualHour = batch.actual_send_time ? parseInt(batch.actual_send_time.split(':')[0]) : hour;
+                                          const ah = batch.actual_send_time ? parseInt(batch.actual_send_time.split(':')[0]) : hour;
                                           setCompletingBatch(batch);
-                                          setCompleteForm({ lc_batch_id: batch.lc_batch_id || '', actual_send_hour: actualHour, conversion_rate: String(batch.conversion_rate ?? '') });
+                                          setCompleteForm({ lc_batch_id: batch.lc_batch_id || '', actual_send_hour: ah, conversion_rate: String(batch.conversion_rate ?? '') });
                                         }}
                                         className="opacity-0 group-hover/results:opacity-100 transition-opacity text-emerald-500 hover:text-emerald-700 hover:scale-110"
                                         title="Update results"
@@ -614,7 +657,7 @@ export default function PlannerPage() {
                               );
                             })}
 
-                            {/* + Add button — always visible on hover */}
+                            {/* + Add button */}
                             <button
                               onClick={(e) => { e.stopPropagation(); setAddingSlot({ date, hour }); setForm(f => ({ ...f, local_target_hour: hour })); }}
                               className={`w-full text-center rounded py-0.5 text-[10px] font-body text-brand-taupe transition-opacity ${cellBatches.length === 0 ? 'opacity-0 group-hover/cell:opacity-50 min-h-[40px] flex items-center justify-center' : 'opacity-0 group-hover/cell:opacity-70 hover:!opacity-100 hover:bg-brand-pine/10'}`}
@@ -678,23 +721,16 @@ export default function PlannerPage() {
                   <label className="block text-xs font-body font-medium text-brand-taupe/70 mb-1">Target Local Time</label>
                   <select value={editForm.local_target_hour} onChange={(e) => setEditForm({ ...editForm, local_target_hour: Number(e.target.value) })} className="select-field">
                     {HOURS.map(h => {
-                      const camp = campaigns.find(c => String(c.id) === editForm.campaign_id);
-                      const q = getTimeQuality(`${String(h).padStart(2,'0')}:00`, camp?.state || '');
-                      return (
-                        <option key={h} value={h}>
-                          {formatHour(h)}{q === 'optimal' ? ' ⭐ Optimal' : q === 'good' ? ' ✓ Good' : ''}
-                        </option>
-                      );
+                      const q = getTimeQuality(`${String(h).padStart(2,'0')}:00`);
+                      return <option key={h} value={h}>{formatHour(h)}{q === 'optimal' ? ' ⭐ Optimal' : q === 'good' ? ' ✓ Good' : ''}</option>;
                     })}
                   </select>
                 </div>
               </div>
 
-              {/* Time quality indicator */}
               {(() => {
+                const q = getTimeQuality(`${String(editForm.local_target_hour).padStart(2, '0')}:00`);
                 const camp = campaigns.find(c => String(c.id) === editForm.campaign_id);
-                if (!camp) return null;
-                const q = getTimeQuality(`${String(editForm.local_target_hour).padStart(2, '0')}:00`, camp.state);
                 return (
                   <div className={`rounded-lg px-3 py-2.5 text-sm font-body flex items-center gap-2 ${
                     q === 'optimal' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
@@ -703,30 +739,26 @@ export default function PlannerPage() {
                   }`}>
                     <span className={`w-2.5 h-2.5 rounded-full ${qualityDot(q)}`}></span>
                     <span className="font-medium capitalize">{q} send window</span>
-                    <span className="text-xs opacity-70">for {camp.state} ({camp.county})</span>
+                    {camp && <span className="text-xs opacity-70">for {camp.state} ({camp.county})</span>}
                   </div>
                 );
               })()}
 
-              {/* TZ preview */}
               <div className="bg-brand-ivory rounded-lg p-3">
                 <p className="text-xs font-body font-semibold text-brand-taupe/70 mb-2">Team Schedule Preview</p>
                 <div className="space-y-1.5">
-                  {users.map(u => {
-                    const converted = convertTimeSimple(`${String(editForm.local_target_hour).padStart(2,'0')}:00`, editingBatch.planned_date, u.timezone);
-                    return (
-                      <div key={u.id} className="flex justify-between text-sm font-body">
-                        <span className="text-brand-taupe/60">{u.display_name} ({u.tz_label})</span>
-                        <span className="font-semibold text-brand-taupe">{converted}</span>
-                      </div>
-                    );
-                  })}
+                  {users.map(u => (
+                    <div key={u.id} className="flex justify-between text-sm font-body">
+                      <span className="text-brand-taupe/60">{u.display_name} ({u.tz_label})</span>
+                      <span className="font-semibold text-brand-taupe">{convertTimeSimple(`${String(editForm.local_target_hour).padStart(2,'0')}:00`, editingBatch.planned_date, u.timezone)}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button type="submit" className="btn-primary flex-1" title="Save changes">Save Changes</button>
-                <button type="button" onClick={() => setEditingBatch(null)} className="btn-outline" title="Cancel">Cancel</button>
+                <button type="submit" className="btn-primary flex-1">Save Changes</button>
+                <button type="button" onClick={() => setEditingBatch(null)} className="btn-outline">Cancel</button>
               </div>
             </form>
           </div>
@@ -773,18 +805,16 @@ export default function PlannerPage() {
                 <div>
                   <label className="block text-xs font-body font-medium text-brand-taupe/70 mb-1">Target Local Time</label>
                   <select value={form.local_target_hour} onChange={(e) => setForm({ ...form, local_target_hour: Number(e.target.value) })} className="select-field">
-                    {HOURS.map(h => (
-                      <option key={h} value={h}>
-                        {formatHour(h)}{getTimeQuality(`${String(h).padStart(2,'0')}:00`, selectedCampaign?.state || '') === 'optimal' ? ' ⭐ Optimal' : getTimeQuality(`${String(h).padStart(2,'0')}:00`, selectedCampaign?.state || '') === 'good' ? ' ✓ Good' : ''}
-                      </option>
-                    ))}
+                    {HOURS.map(h => {
+                      const q = getTimeQuality(`${String(h).padStart(2,'0')}:00`);
+                      return <option key={h} value={h}>{formatHour(h)}{q === 'optimal' ? ' ⭐ Optimal' : q === 'good' ? ' ✓ Good' : ''}</option>;
+                    })}
                   </select>
                 </div>
               </div>
 
-              {/* Time quality indicator */}
               {selectedCampaign && (() => {
-                const q = getTimeQuality(`${String(form.local_target_hour).padStart(2, '0')}:00`, selectedCampaign.state);
+                const q = getTimeQuality(`${String(form.local_target_hour).padStart(2, '0')}:00`);
                 return (
                   <div className={`rounded-lg px-3 py-2.5 text-sm font-body flex items-center gap-2 ${
                     q === 'optimal' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
@@ -798,32 +828,28 @@ export default function PlannerPage() {
                 );
               })()}
 
-              {/* TZ preview */}
               <div className="bg-brand-ivory rounded-lg p-3">
                 <p className="text-xs font-body font-semibold text-brand-taupe/70 mb-2">Team Schedule Preview</p>
                 <div className="space-y-1.5">
-                  {users.map(u => {
-                    const converted = convertTimeSimple(`${String(form.local_target_hour).padStart(2,'0')}:00`, addingSlot.date, u.timezone);
-                    return (
-                      <div key={u.id} className="flex justify-between text-sm font-body">
-                        <span className="text-brand-taupe/60">{u.display_name} ({u.tz_label})</span>
-                        <span className="font-semibold text-brand-taupe">{converted}</span>
-                      </div>
-                    );
-                  })}
+                  {users.map(u => (
+                    <div key={u.id} className="flex justify-between text-sm font-body">
+                      <span className="text-brand-taupe/60">{u.display_name} ({u.tz_label})</span>
+                      <span className="font-semibold text-brand-taupe">{convertTimeSimple(`${String(form.local_target_hour).padStart(2,'0')}:00`, addingSlot.date, u.timezone)}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
               <div className="flex gap-3 pt-2">
-                <button type="submit" className="btn-primary flex-1" title="Schedule this batch">Schedule Batch</button>
-                <button type="button" onClick={() => setAddingSlot(null)} className="btn-outline" title="Cancel">Cancel</button>
+                <button type="submit" className="btn-primary flex-1">Schedule Batch</button>
+                <button type="button" onClick={() => setAddingSlot(null)} className="btn-outline">Cancel</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* ===================== MARK DONE MODAL ===================== */}
+      {/* ===================== MARK DONE / UPDATE RESULTS MODAL ===================== */}
       {completingBatch && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setCompletingBatch(null)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
@@ -832,6 +858,7 @@ export default function PlannerPage() {
             </h3>
             <p className="font-body text-sm text-brand-taupe/60 mb-4">
               {completingBatch.campaign_name} — Batch #{completingBatch.batch_number}
+              {isDone(completingBatch) && <span className="ml-2 text-brand-taupe/40">(planned {formatHour(parseInt(completingBatch.local_target_time))})</span>}
             </p>
             <form onSubmit={markDone} className="space-y-4">
               <div>
@@ -844,7 +871,12 @@ export default function PlannerPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-body font-medium text-brand-taupe/70 mb-1">Actual Send Time</label>
+                <label className="block text-xs font-body font-medium text-brand-taupe/70 mb-1">
+                  Actual Send Time
+                  {completeForm.actual_send_hour !== parseInt(completingBatch.local_target_time) && (
+                    <span className="ml-2 text-red-500 font-semibold text-[10px]">⚠ Differs from planned ({formatHour(parseInt(completingBatch.local_target_time))})</span>
+                  )}
+                </label>
                 <select value={completeForm.actual_send_hour} onChange={(e) => setCompleteForm({ ...completeForm, actual_send_hour: Number(e.target.value) })} className="select-field">
                   {HOURS.map(h => <option key={h} value={h}>{formatHour(h)}</option>)}
                 </select>
@@ -874,10 +906,10 @@ export default function PlannerPage() {
               )}
 
               <div className="flex gap-3 pt-2">
-                <button type="submit" className="flex-1 py-2.5 px-4 rounded-lg font-body font-medium text-sm bg-emerald-600 text-white hover:bg-emerald-700 transition-colors" title="Confirm completion">
-                  Mark as Done
+                <button type="submit" className="flex-1 py-2.5 px-4 rounded-lg font-body font-medium text-sm bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">
+                  {isDone(completingBatch) ? 'Update Results' : 'Mark as Done'}
                 </button>
-                <button type="button" onClick={() => setCompletingBatch(null)} className="btn-outline" title="Cancel">Cancel</button>
+                <button type="button" onClick={() => setCompletingBatch(null)} className="btn-outline">Cancel</button>
               </div>
             </form>
           </div>

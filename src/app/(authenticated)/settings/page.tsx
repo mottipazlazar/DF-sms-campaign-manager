@@ -13,7 +13,11 @@ const US_STATES = [
   'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
 ];
 
-type Tab = 'users' | 'locations' | 'templates';
+type Tab = 'users' | 'locations' | 'templates' | 'times';
+type TimeRange = [number, number];
+
+const ALL_HOURS = Array.from({ length: 16 }, (_, i) => i + 6); // 6am–9pm
+function fmtH(h: number) { if (h === 12) return '12pm'; return h < 12 ? `${h}am` : `${h - 12}pm`; }
 
 export default function SettingsPage() {
   const { data: session } = useSession();
@@ -44,7 +48,25 @@ export default function SettingsPage() {
   const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
   const [editTemplateValue, setEditTemplateValue] = useState('');
 
+  // Send Times settings
+  const [optimalRanges, setOptimalRanges] = useState<TimeRange[]>([[8,9],[10,12],[17,19]]);
+  const [goodRanges, setGoodRanges] = useState<TimeRange[]>([[9,10],[12,14],[16,17]]);
+  const [optimalSettingId, setOptimalSettingId] = useState<number | null>(null);
+  const [goodSettingId, setGoodSettingId] = useState<number | null>(null);
+  const [newOptRange, setNewOptRange] = useState<TimeRange>([8, 9]);
+  const [newGoodRange, setNewGoodRange] = useState<TimeRange>([9, 10]);
+  const [timesSaving, setTimesSaving] = useState(false);
+
   useEffect(() => { fetchData(); }, [tab]);
+
+  useEffect(() => {
+    fetch('/api/settings?category=general').then(r => r.json()).then((data: any[]) => {
+      const opt = data.find((d: any) => d.key === 'optimal_hours');
+      const good = data.find((d: any) => d.key === 'good_hours');
+      if (opt) { try { setOptimalRanges(JSON.parse(opt.value)); setOptimalSettingId(opt.id); } catch {} }
+      if (good) { try { setGoodRanges(JSON.parse(good.value)); setGoodSettingId(good.id); } catch {} }
+    });
+  }, []);
 
   const fetchData = async () => {
     setLoading(true);
@@ -149,10 +171,49 @@ export default function SettingsPage() {
     fetchData();
   };
 
+  const saveTimeRanges = async (type: 'optimal' | 'good', newRanges: TimeRange[]) => {
+    setTimesSaving(true);
+    const id = type === 'optimal' ? optimalSettingId : goodSettingId;
+    const key = type === 'optimal' ? 'optimal_hours' : 'good_hours';
+    if (id) {
+      await fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, value: JSON.stringify(newRanges) }) });
+    } else {
+      const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value: JSON.stringify(newRanges), category: 'general' }) });
+      const created = await res.json();
+      if (type === 'optimal') setOptimalSettingId(created.id); else setGoodSettingId(created.id);
+    }
+    setTimesSaving(false);
+  };
+
+  const addOptimalRange = async () => {
+    const newRanges: TimeRange[] = [...optimalRanges, newOptRange];
+    setOptimalRanges(newRanges);
+    await saveTimeRanges('optimal', newRanges);
+  };
+
+  const removeOptimalRange = async (idx: number) => {
+    const newRanges = optimalRanges.filter((_, i) => i !== idx);
+    setOptimalRanges(newRanges);
+    await saveTimeRanges('optimal', newRanges);
+  };
+
+  const addGoodRange = async () => {
+    const newRanges: TimeRange[] = [...goodRanges, newGoodRange];
+    setGoodRanges(newRanges);
+    await saveTimeRanges('good', newRanges);
+  };
+
+  const removeGoodRange = async (idx: number) => {
+    const newRanges = goodRanges.filter((_, i) => i !== idx);
+    setGoodRanges(newRanges);
+    await saveTimeRanges('good', newRanges);
+  };
+
   const tabs: { key: Tab; label: string; icon: string }[] = [
     { key: 'users', label: 'Users & VAs', icon: '👥' },
     { key: 'locations', label: 'Locations', icon: '📍' },
     { key: 'templates', label: 'Templates', icon: '📝' },
+    { key: 'times', label: 'Send Times', icon: '⏰' },
   ];
 
   return (
@@ -371,7 +432,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-      ) : (
+      ) : tab === 'templates' ? (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-display font-semibold text-xl text-brand-taupe">Templates</h2>
@@ -415,6 +476,74 @@ export default function SettingsPage() {
                 {templates.length === 0 && <tr><td colSpan={2} className="table-cell text-center text-brand-taupe/40">No templates yet</td></tr>}
               </tbody>
             </table>
+          </div>
+        </div>
+
+      ) : (
+        /* ── Send Times Tab ── */
+        <div className="space-y-6 max-w-xl">
+          <div className="flex items-center gap-2">
+            <h2 className="font-display font-semibold text-xl text-brand-taupe">Send Time Windows</h2>
+            {timesSaving && <span className="text-xs text-brand-taupe/40 font-body">Saving...</span>}
+          </div>
+          <p className="text-sm font-body text-brand-taupe/60 -mt-4">
+            These windows drive the planner grid highlights, time picker labels, and the TZ converter quality indicator.
+          </p>
+
+          {/* Optimal Windows */}
+          <div className="card">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
+              <h3 className="font-body font-semibold text-brand-taupe">Optimal Windows</h3>
+              <span className="text-xs text-brand-taupe/40">(green on grid)</span>
+            </div>
+            <div className="space-y-2 mb-4">
+              {optimalRanges.map(([s, e], idx) => (
+                <div key={idx} className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                  <span className="font-body text-sm text-emerald-800 font-medium">{fmtH(s)} – {fmtH(e)}</span>
+                  <button onClick={() => removeOptimalRange(idx)} className="text-red-400 hover:text-red-600 text-xs" title="Remove">× Remove</button>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-3 border-t border-brand-taupe/10">
+              <span className="text-xs font-body text-brand-taupe/60">Add:</span>
+              <select value={newOptRange[0]} onChange={e => setNewOptRange([Number(e.target.value), newOptRange[1]])} className="select-field text-sm w-24">
+                {ALL_HOURS.map(h => <option key={h} value={h}>{fmtH(h)}</option>)}
+              </select>
+              <span className="text-brand-taupe/40 text-sm">to</span>
+              <select value={newOptRange[1]} onChange={e => setNewOptRange([newOptRange[0], Number(e.target.value)])} className="select-field text-sm w-24">
+                {ALL_HOURS.filter(h => h > newOptRange[0]).map(h => <option key={h} value={h}>{fmtH(h)}</option>)}
+              </select>
+              <button onClick={addOptimalRange} className="btn-primary text-sm px-3">+ Add</button>
+            </div>
+          </div>
+
+          {/* Good Windows */}
+          <div className="card">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="w-3 h-3 rounded-full bg-amber-400"></span>
+              <h3 className="font-body font-semibold text-brand-taupe">Good Windows</h3>
+              <span className="text-xs text-brand-taupe/40">(amber on grid)</span>
+            </div>
+            <div className="space-y-2 mb-4">
+              {goodRanges.map(([s, e], idx) => (
+                <div key={idx} className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                  <span className="font-body text-sm text-amber-800 font-medium">{fmtH(s)} – {fmtH(e)}</span>
+                  <button onClick={() => removeGoodRange(idx)} className="text-red-400 hover:text-red-600 text-xs" title="Remove">× Remove</button>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 pt-3 border-t border-brand-taupe/10">
+              <span className="text-xs font-body text-brand-taupe/60">Add:</span>
+              <select value={newGoodRange[0]} onChange={e => setNewGoodRange([Number(e.target.value), newGoodRange[1]])} className="select-field text-sm w-24">
+                {ALL_HOURS.map(h => <option key={h} value={h}>{fmtH(h)}</option>)}
+              </select>
+              <span className="text-brand-taupe/40 text-sm">to</span>
+              <select value={newGoodRange[1]} onChange={e => setNewGoodRange([newGoodRange[0], Number(e.target.value)])} className="select-field text-sm w-24">
+                {ALL_HOURS.filter(h => h > newGoodRange[0]).map(h => <option key={h} value={h}>{fmtH(h)}</option>)}
+              </select>
+              <button onClick={addGoodRange} className="btn-primary text-sm px-3">+ Add</button>
+            </div>
           </div>
         </div>
       )}

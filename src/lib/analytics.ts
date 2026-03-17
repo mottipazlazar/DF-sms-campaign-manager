@@ -7,10 +7,16 @@ export async function getAnalytics(startDate?: string, endDate?: string): Promis
   const hasDateFilter = !!(startDate && endDate);
   const dateArgs = hasDateFilter ? [startDate!, endDate!] : [];
 
+  // Exclude skipped batches from all stats
+  const skipFilter = '(b.skipped IS NULL OR b.skipped = 0)';
+
   const where = (extra: string) =>
     hasDateFilter
-      ? `WHERE b.planned_date >= ? AND b.planned_date <= ? AND ${extra}`
-      : `WHERE ${extra}`;
+      ? `WHERE b.planned_date >= ? AND b.planned_date <= ? AND ${skipFilter} AND ${extra}`
+      : `WHERE ${skipFilter} AND ${extra}`;
+
+  // Use actual_send_time when available (requirement: stats based on actual run time)
+  const actualHour = `COALESCE(substr(actual_send_time,1,2), substr(local_target_time,1,2))`;
 
   // Totals
   const totalsResult = await db.execute({
@@ -27,16 +33,16 @@ export async function getAnalytics(startDate?: string, endDate?: string): Promis
   });
   const totals = totalsResult.rows[0] as any;
 
-  // Best send times
+  // Best send times — by actual send hour
   const bestResult = await db.execute({
     sql: `
       SELECT
-        substr(local_target_time, 1, 2) || ':00' as time,
+        ${actualHour} || ':00' as time,
         AVG(conversion_rate) as avg_rate,
         COUNT(*) as count
       FROM batches b
       ${where('conversion_rate IS NOT NULL')}
-      GROUP BY substr(local_target_time, 1, 2)
+      GROUP BY ${actualHour}
       ORDER BY avg_rate DESC
       LIMIT 5
     `,
@@ -44,16 +50,16 @@ export async function getAnalytics(startDate?: string, endDate?: string): Promis
   });
   const bestSendTimes = bestResult.rows as any[];
 
-  // Worst send times
+  // Worst send times — by actual send hour
   const worstResult = await db.execute({
     sql: `
       SELECT
-        substr(local_target_time, 1, 2) || ':00' as time,
+        ${actualHour} || ':00' as time,
         AVG(conversion_rate) as avg_rate,
         COUNT(*) as count
       FROM batches b
       ${where('conversion_rate IS NOT NULL')}
-      GROUP BY substr(local_target_time, 1, 2)
+      GROUP BY ${actualHour}
       HAVING COUNT(*) >= 1
       ORDER BY avg_rate ASC
       LIMIT 5
@@ -97,7 +103,7 @@ export async function getAnalytics(startDate?: string, endDate?: string): Promis
   });
   const topTemplates = templatesResult.rows as any[];
 
-  // Daily performance
+  // Daily performance — exclude skipped
   const dailyResult = await db.execute({
     sql: `
       SELECT
@@ -106,7 +112,8 @@ export async function getAnalytics(startDate?: string, endDate?: string): Promis
         COALESCE(SUM(reply_count), 0) as replies,
         COALESCE(AVG(conversion_rate), 0) as rate
       FROM batches b
-      ${hasDateFilter ? 'WHERE b.planned_date >= ? AND b.planned_date <= ?' : ''}
+      WHERE ${skipFilter}
+      ${hasDateFilter ? 'AND b.planned_date >= ? AND b.planned_date <= ?' : ''}
       GROUP BY planned_date
       ORDER BY planned_date DESC
       LIMIT 30
