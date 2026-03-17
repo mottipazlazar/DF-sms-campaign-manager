@@ -71,6 +71,13 @@ export default function PlannerPage() {
   const [optimalRanges, setOptimalRanges] = useState<TimeRange[]>([[8,9],[10,12],[17,19]]);
   const [goodRanges, setGoodRanges] = useState<TimeRange[]>([[9,10],[12,14],[16,17]]);
 
+  // Live "Now" clock — ticks every 30s
+  const [nowTime, setNowTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNowTime(new Date()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Time converter widget state
   const [convCounty, setConvCounty] = useState('');
   const [convHour, setConvHour] = useState(9);
@@ -325,7 +332,12 @@ export default function PlannerPage() {
   // Batch state helpers
   const isSkipped = (b: PlannerBatch) => b.skipped === 1;
   const isDone = (b: PlannerBatch) => !isSkipped(b) && b.conversion_rate != null && b.actual_send_time != null;
-  const isLate = (b: PlannerBatch) => isDone(b) && b.actual_send_time != null && b.actual_send_time !== b.local_target_time;
+
+  // null = no diff; 'late' = sent after planned; 'earlier' = sent before planned
+  const getTimeDiff = (b: PlannerBatch): 'late' | 'earlier' | null => {
+    if (!isDone(b) || !b.actual_send_time || b.actual_send_time === b.local_target_time) return null;
+    return b.actual_send_time > b.local_target_time ? 'late' : 'earlier';
+  };
 
   // Dynamic time quality — uses ranges loaded from settings
   const getTimeQuality = useCallback((time: string): 'optimal' | 'good' | 'neutral' => {
@@ -335,10 +347,30 @@ export default function PlannerPage() {
     return 'neutral';
   }, [optimalRanges, goodRanges]);
 
+  // Quality level for comparison: optimal=2, good=1, neutral=0
+  const qualityLevel = (q: 'optimal' | 'good' | 'neutral') =>
+    q === 'optimal' ? 2 : q === 'good' ? 1 : 0;
+
+  // Badge/border color based on grade comparison: red=downgrade, orange=same, yellow=upgrade
+  const getTimeDiffColor = useCallback((b: PlannerBatch): 'red' | 'orange' | 'yellow' => {
+    const plannedQ = getTimeQuality(b.local_target_time);
+    const actualQ = getTimeQuality(b.actual_send_time!);
+    const delta = qualityLevel(actualQ) - qualityLevel(plannedQ);
+    if (delta < 0) return 'red';
+    if (delta === 0) return 'orange';
+    return 'yellow';
+  }, [getTimeQuality]);
+
   // Card visual style based on batch state
   const cardStyle = (b: PlannerBatch, q: 'optimal' | 'good' | 'neutral') => {
     if (isSkipped(b)) return 'border-l-gray-600 bg-gray-50 border-gray-400 border-2 opacity-60';
-    if (isLate(b)) return 'border-l-red-500 bg-red-50/50 border-red-300 border-2';
+    const diff = getTimeDiff(b);
+    if (diff !== null) {
+      const dc = getTimeDiffColor(b);
+      if (dc === 'red')    return 'border-l-red-500 bg-red-50/50 border-red-300 border-2';
+      if (dc === 'orange') return 'border-l-orange-500 bg-orange-50/40 border-orange-300 border-2';
+      return 'border-l-yellow-500 bg-yellow-50/40 border-yellow-300 border-2';
+    }
     if (isDone(b)) return 'border-l-emerald-600 bg-emerald-50 border-emerald-200';
     if (q === 'optimal') return 'border-l-emerald-500 bg-emerald-50/60 border-blue-200';
     if (q === 'good') return 'border-l-amber-400 bg-amber-50/60 border-blue-200';
@@ -498,10 +530,27 @@ export default function PlannerPage() {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          <button onClick={() => setWeekOffset(w => w - 1)} className="btn-outline text-sm px-3">← Prev</button>
-          <button onClick={() => setWeekOffset(0)} className="btn-secondary text-sm px-3">This Week</button>
-          <button onClick={() => setWeekOffset(w => w + 1)} className="btn-outline text-sm px-3">Next →</button>
+        <div className="flex flex-col items-end gap-2">
+          {/* Live team clocks */}
+          {users.length > 0 && (
+            <div className="flex items-center gap-2 bg-brand-ivory border border-brand-taupe/15 rounded-xl px-3 py-1.5 flex-shrink-0">
+              <span className="text-[10px] font-body font-semibold text-brand-taupe/40 uppercase tracking-wide mr-1">Now</span>
+              {users.map(u => (
+                <div key={u.id} className="flex flex-col items-center px-2 border-l border-brand-taupe/10 first:border-l-0">
+                  <span className="text-[9px] font-body text-brand-taupe/40">{u.tz_label}</span>
+                  <span className="text-xs font-body font-bold text-brand-taupe">
+                    {nowTime.toLocaleTimeString('en-US', { timeZone: u.timezone, hour: 'numeric', minute: '2-digit', hour12: true })}
+                  </span>
+                  <span className="text-[9px] font-body text-brand-taupe/35">{u.display_name.split(' ')[0]}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <button onClick={() => setWeekOffset(w => w - 1)} className="btn-outline text-sm px-3">← Prev</button>
+            <button onClick={() => setWeekOffset(0)} className="btn-secondary text-sm px-3">This Week</button>
+            <button onClick={() => setWeekOffset(w => w + 1)} className="btn-outline text-sm px-3">Next →</button>
+          </div>
         </div>
       </div>
 
@@ -511,7 +560,7 @@ export default function PlannerPage() {
         <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Good ({formatRanges(goodRanges)})</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-blue-400 bg-blue-50"></span> Planned</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-emerald-600 bg-emerald-100"></span> Done</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-[2px] border-red-400 bg-red-50"></span> Late send</span>
+        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-[2px] border-red-400 bg-red-50"></span> Off-time (red=downgrade, orange=same, yellow=upgrade)</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-gray-500 bg-gray-100 opacity-60"></span> Skipped</span>
       </div>
 
@@ -563,7 +612,8 @@ export default function PlannerPage() {
                             {cellBatches.map((batch) => {
                               const done = isDone(batch);
                               const skipped = isSkipped(batch);
-                              const late = isLate(batch);
+                              const diff = getTimeDiff(batch); // 'late' | 'earlier' | null
+                              const diffColor = diff !== null ? getTimeDiffColor(batch) : null; // 'red'|'orange'|'yellow'|null
                               const quality = getTimeQuality(batch.local_target_time);
                               const actualHour = batch.actual_send_time ? parseInt(batch.actual_send_time.split(':')[0]) : null;
 
@@ -580,8 +630,10 @@ export default function PlannerPage() {
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       {skipped ? (
                                         <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-gray-600 text-white">Skip</span>
-                                      ) : late ? (
-                                        <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-red-500 text-white flex items-center gap-0.5">⚠ Late</span>
+                                      ) : diff !== null ? (
+                                        <span className={`px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide text-white flex items-center gap-0.5 ${
+                                          diffColor === 'red' ? 'bg-red-500' : diffColor === 'orange' ? 'bg-orange-400' : 'bg-yellow-500'
+                                        }`}>⚠ {diff === 'late' ? 'Late' : 'Earlier'}</span>
                                       ) : done ? (
                                         <span className="px-1.5 py-0 rounded text-[9px] font-bold uppercase tracking-wide bg-emerald-600 text-white">Done</span>
                                       ) : (
@@ -589,20 +641,22 @@ export default function PlannerPage() {
                                       )}
                                       <span className="font-medium text-brand-taupe">{formatHour(hour)}</span>
                                       {!skipped && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${qualityDot(quality)}`} title={`${quality} window`}></span>}
-                                      {/* Late: show actual send time prominently */}
-                                      {late && actualHour !== null && (
-                                        <span className="text-[9px] font-semibold text-red-600 bg-red-100 px-1 rounded">
-                                          sent {formatHour(actualHour)}
-                                        </span>
+                                      {/* Off-time: show actual send time pill */}
+                                      {diff !== null && actualHour !== null && (
+                                        <span className={`text-[9px] font-semibold px-1 rounded ${
+                                          diffColor === 'red' ? 'text-red-700 bg-red-100' :
+                                          diffColor === 'orange' ? 'text-orange-700 bg-orange-100' :
+                                          'text-yellow-800 bg-yellow-100'
+                                        }`}>sent {formatHour(actualHour)}</span>
                                       )}
                                     </div>
                                     <div className="flex items-center gap-0.5 opacity-0 group-hover/card:opacity-100 transition-opacity">
                                       {skipped ? (
-                                        <button onClick={(e) => { e.stopPropagation(); unmarkSkipped(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Restore batch">↩️</button>
+                                        <button onClick={(e) => { e.stopPropagation(); unmarkSkipped(batch); }} className="text-[9px] font-bold bg-brand-pine text-white rounded px-1.5 py-0.5 hover:bg-brand-pine/80 transition-colors" title="Restore batch">↩ Restore</button>
                                       ) : !done ? (
                                         <>
                                           <button onClick={(e) => { e.stopPropagation(); setCompletingBatch(batch); setCompleteForm({ lc_batch_id: batch.lc_batch_id || '', actual_send_hour: hour, conversion_rate: '' }); }} className="hover:scale-110 transition-transform text-[10px]" title="Mark as Done">✅</button>
-                                          <button onClick={(e) => { e.stopPropagation(); markSkipped(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Mark as Skipped">⊘</button>
+                                          <button onClick={(e) => { e.stopPropagation(); markSkipped(batch); }} className="text-[9px] font-bold bg-amber-500 text-white rounded px-1.5 py-0.5 hover:bg-amber-600 transition-colors" title="Mark as Skipped">⊘ Skip</button>
                                         </>
                                       ) : null}
                                       <button onClick={(e) => { e.stopPropagation(); openEditBatch(batch); }} className="hover:scale-110 transition-transform text-[10px]" title="Edit batch">✏️</button>
@@ -637,9 +691,24 @@ export default function PlannerPage() {
 
                                   {/* Row 5: Results if done */}
                                   {done && (
-                                    <div className={`mt-1 pt-1 border-t ${late ? 'border-red-200' : 'border-emerald-200'} flex items-center justify-between text-[10px] group/results`}>
-                                      <span className={`font-medium ${late ? 'text-red-700' : 'text-emerald-700'}`}>{batch.conversion_rate}% conv</span>
-                                      <span className={`font-medium ${late ? 'text-red-700' : 'text-emerald-700'}`}>{Math.round(batch.reply_count || 0)} replies</span>
+                                    <div className={`mt-1 pt-1 border-t ${
+                                      diffColor === 'red' ? 'border-red-200' :
+                                      diffColor === 'orange' ? 'border-orange-200' :
+                                      diffColor === 'yellow' ? 'border-yellow-200' :
+                                      'border-emerald-200'
+                                    } flex items-center justify-between text-[10px] group/results`}>
+                                      <span className={`font-medium ${
+                                        diffColor === 'red' ? 'text-red-700' :
+                                        diffColor === 'orange' ? 'text-orange-700' :
+                                        diffColor === 'yellow' ? 'text-yellow-800' :
+                                        'text-emerald-700'
+                                      }`}>{batch.conversion_rate}% conv</span>
+                                      <span className={`font-medium ${
+                                        diffColor === 'red' ? 'text-red-700' :
+                                        diffColor === 'orange' ? 'text-orange-700' :
+                                        diffColor === 'yellow' ? 'text-yellow-800' :
+                                        'text-emerald-700'
+                                      }`}>{Math.round(batch.reply_count || 0)} replies</span>
                                       {batch.lc_batch_id && <span className="text-emerald-600/60">LC#{batch.lc_batch_id}</span>}
                                       <button
                                         onClick={(e) => {

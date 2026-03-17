@@ -507,7 +507,7 @@ export default function SettingsPage() {
             </div>
             <div className="flex items-center gap-2 pt-3 border-t border-brand-taupe/10">
               <span className="text-xs font-body text-brand-taupe/60">Add:</span>
-              <select value={newOptRange[0]} onChange={e => setNewOptRange([Number(e.target.value), newOptRange[1]])} className="select-field text-sm w-24">
+              <select value={newOptRange[0]} onChange={e => { const s = Number(e.target.value); setNewOptRange([s, newOptRange[1] > s ? newOptRange[1] : s + 1]); }} className="select-field text-sm w-24">
                 {ALL_HOURS.map(h => <option key={h} value={h}>{fmtH(h)}</option>)}
               </select>
               <span className="text-brand-taupe/40 text-sm">to</span>
@@ -535,7 +535,7 @@ export default function SettingsPage() {
             </div>
             <div className="flex items-center gap-2 pt-3 border-t border-brand-taupe/10">
               <span className="text-xs font-body text-brand-taupe/60">Add:</span>
-              <select value={newGoodRange[0]} onChange={e => setNewGoodRange([Number(e.target.value), newGoodRange[1]])} className="select-field text-sm w-24">
+              <select value={newGoodRange[0]} onChange={e => { const s = Number(e.target.value); setNewGoodRange([s, newGoodRange[1] > s ? newGoodRange[1] : s + 1]); }} className="select-field text-sm w-24">
                 {ALL_HOURS.map(h => <option key={h} value={h}>{fmtH(h)}</option>)}
               </select>
               <span className="text-brand-taupe/40 text-sm">to</span>
