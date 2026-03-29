@@ -683,7 +683,7 @@ export default function PlannerPage() {
                                       {users.map(u => (
                                         <div key={u.id} className="flex justify-between text-[9px] text-brand-taupe/45">
                                           <span>{u.display_name} ({u.tz_label})</span>
-                                          <span className="font-medium">{convertTimeSimple(batch.local_target_time, batch.planned_date, u.timezone)}</span>
+                                          <span className="font-medium">{convertTimeSimple(batch.local_target_time, batch.planned_date, u.timezone, STATE_TZ_MAP[batch.state] || 'America/New_York')}</span>
                                         </div>
                                       ))}
                                     </div>
@@ -819,7 +819,7 @@ export default function PlannerPage() {
                   {users.map(u => (
                     <div key={u.id} className="flex justify-between text-sm font-body">
                       <span className="text-brand-taupe/60">{u.display_name} ({u.tz_label})</span>
-                      <span className="font-semibold text-brand-taupe">{convertTimeSimple(`${String(editForm.local_target_hour).padStart(2,'0')}:00`, editingBatch.planned_date, u.timezone)}</span>
+                      <span className="font-semibold text-brand-taupe">{convertTimeSimple(`${String(editForm.local_target_hour).padStart(2,'0')}:00`, editingBatch.planned_date, u.timezone, STATE_TZ_MAP[campaigns.find(c => String(c.id) === editForm.campaign_id)?.state || ''] || 'America/New_York')}</span>
                     </div>
                   ))}
                 </div>
@@ -903,7 +903,7 @@ export default function PlannerPage() {
                   {users.map(u => (
                     <div key={u.id} className="flex justify-between text-sm font-body">
                       <span className="text-brand-taupe/60">{u.display_name} ({u.tz_label})</span>
-                      <span className="font-semibold text-brand-taupe">{convertTimeSimple(`${String(form.local_target_hour).padStart(2,'0')}:00`, addingSlot.date, u.timezone)}</span>
+                      <span className="font-semibold text-brand-taupe">{convertTimeSimple(`${String(form.local_target_hour).padStart(2,'0')}:00`, addingSlot.date, u.timezone, STATE_TZ_MAP[selectedCampaign?.state || ''] || 'America/New_York')}</span>
                     </div>
                   ))}
                 </div>
@@ -994,13 +994,13 @@ function formatHour(h: number): string {
   return h < 12 ? `${h}am` : `${h - 12}pm`;
 }
 
-function convertTimeSimple(localTime: string, localDate: string, targetTz: string): string {
+function convertTimeSimple(localTime: string, localDate: string, targetTz: string, sourceTz = 'America/New_York'): string {
   try {
     const [h, m] = localTime.split(':').map(Number);
     const refDate = new Date(`${localDate}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00Z`);
-    const etOffset = getOffset('America/New_York', refDate);
+    const sourceOffset = getOffset(sourceTz, refDate);
     const targetOffset = getOffset(targetTz, refDate);
-    const diff = targetOffset - etOffset;
+    const diff = targetOffset - sourceOffset;
     const total = h * 60 + m + diff;
     let rh = Math.floor(total / 60) % 24;
     let rm = total % 60;
