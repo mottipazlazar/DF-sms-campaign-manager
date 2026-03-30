@@ -47,18 +47,23 @@ export async function POST(req: NextRequest) {
     batchNum = (Number((maxResult.rows[0] as any)?.max) || 0) + 1;
   }
 
-  const insertResult = await db.execute({
-    sql: `INSERT INTO batches (campaign_id, batch_number, lc_batch_id, template, message_count, owner_id, local_target_time, planned_date, sort_order, notes)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [campaign_id, batchNum, lc_batch_id || '', template, message_count || 50, owner_id, local_target_time, planned_date, sort_order || 0, notes || ''],
-  });
+  try {
+    const insertResult = await db.execute({
+      sql: `INSERT INTO batches (campaign_id, batch_number, lc_batch_id, template, message_count, owner_id, local_target_time, planned_date, sort_order, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [campaign_id, batchNum, lc_batch_id || '', template, message_count || 50, owner_id, local_target_time, planned_date, sort_order || 0, notes || ''],
+    });
 
-  const batchResult = await db.execute({
-    sql: `SELECT b.*, u.display_name as owner_name FROM batches b LEFT JOIN users u ON b.owner_id = u.id WHERE b.id = ?`,
-    args: [Number(insertResult.lastInsertRowid)],
-  });
+    const batchResult = await db.execute({
+      sql: `SELECT b.*, u.display_name as owner_name FROM batches b LEFT JOIN users u ON b.owner_id = u.id WHERE b.id = ?`,
+      args: [Number(insertResult.lastInsertRowid)],
+    });
 
-  return NextResponse.json(batchResult.rows[0], { status: 201 });
+    return NextResponse.json(batchResult.rows[0], { status: 201 });
+  } catch (err: any) {
+    const msg = err?.cause?.message || err?.message || 'Database error';
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
 
 export async function PATCH(req: NextRequest) {
@@ -91,19 +96,24 @@ export async function PATCH(req: NextRequest) {
     values.push(value);
   }
 
-  if (setClauses.length > 0) {
-    await db.execute({
-      sql: `UPDATE batches SET ${setClauses.join(', ')} WHERE id = ?`,
-      args: [...values, id],
+  try {
+    if (setClauses.length > 0) {
+      await db.execute({
+        sql: `UPDATE batches SET ${setClauses.join(', ')} WHERE id = ?`,
+        args: [...values, id],
+      });
+    }
+
+    const batchResult = await db.execute({
+      sql: `SELECT b.*, u.display_name as owner_name FROM batches b LEFT JOIN users u ON b.owner_id = u.id WHERE b.id = ?`,
+      args: [id],
     });
+
+    return NextResponse.json(batchResult.rows[0]);
+  } catch (err: any) {
+    const msg = err?.cause?.message || err?.message || 'Database error';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
-
-  const batchResult = await db.execute({
-    sql: `SELECT b.*, u.display_name as owner_name FROM batches b LEFT JOIN users u ON b.owner_id = u.id WHERE b.id = ?`,
-    args: [id],
-  });
-
-  return NextResponse.json(batchResult.rows[0]);
 }
 
 export async function DELETE(req: NextRequest) {
