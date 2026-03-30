@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -22,11 +23,12 @@ export default function LoginPage() {
       redirect: false,
     });
 
-    setLoading(false);
-
-    if (result?.error) {
+    if (!result?.ok) {
+      // Stay on login page — reset loading so button is usable again
+      setLoading(false);
       setError('Invalid username or password');
     } else {
+      // Keep loading=true so spinner stays visible while navigating away
       router.push('/dashboard');
     }
   };
@@ -56,25 +58,39 @@ export default function LoginPage() {
                 onChange={(e) => setUsername(e.target.value)}
                 className="input-field"
                 placeholder="Enter your username"
+                autoComplete="username"
                 required
               />
             </div>
 
             <div>
               <label className="block text-sm font-body font-medium text-brand-taupe mb-1">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="input-field"
-                placeholder="Enter your password"
-                required
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input-field pr-10"
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-brand-taupe/40 hover:text-brand-taupe transition-colors text-sm"
+                  tabIndex={-1}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? '🙈' : '👁️'}
+                </button>
+              </div>
             </div>
 
             {error && (
-              <div className="bg-red-50 text-red-600 text-sm font-body px-3 py-2 rounded-lg">
-                {error}
+              <div className="bg-red-50 border border-red-200 text-red-600 text-sm font-body px-3 py-2 rounded-lg flex items-center gap-2">
+                <span>⚠</span>
+                <span>{error}</span>
               </div>
             )}
 
@@ -83,9 +99,7 @@ export default function LoginPage() {
               disabled={loading}
               className="btn-primary w-full flex items-center justify-center gap-2"
             >
-              {loading ? (
-                <span className="animate-spin">⏳</span>
-              ) : null}
+              {loading && <span className="animate-spin inline-block">⏳</span>}
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
