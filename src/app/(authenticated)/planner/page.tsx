@@ -28,7 +28,7 @@ interface PlannerBatch {
 interface Toast {
   id: number;
   message: string;
-  type: 'success' | 'info';
+  type: 'success' | 'info' | 'error';
 }
 
 type TimeRange = [number, number];
@@ -154,7 +154,7 @@ export default function PlannerPage() {
     setLoading(false);
   };
 
-  const showToast = useCallback((message: string, type: 'success' | 'info' = 'success') => {
+  const showToast = useCallback((message: string, type: 'success' | 'info' | 'error' = 'success') => {
     const id = ++toastId.current;
     setToasts(t => [...t, { id, message, type }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
@@ -176,7 +176,7 @@ export default function PlannerPage() {
     e.preventDefault();
     if (!addingSlot) return;
     const time = `${String(form.local_target_hour).padStart(2, '0')}:00`;
-    await fetch('/api/batches', {
+    const res = await fetch('/api/batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -188,6 +188,11 @@ export default function PlannerPage() {
         planned_date: addingSlot.date,
       }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || `Failed to save batch (${res.status})`, 'error');
+      return;
+    }
     setAddingSlot(null);
     await fetchAll();
     const camp = campaigns.find(c => String(c.id) === form.campaign_id);
@@ -215,7 +220,7 @@ export default function PlannerPage() {
     e.preventDefault();
     if (!editingBatch) return;
     const newTime = `${String(editForm.local_target_hour).padStart(2, '0')}:00`;
-    await fetch('/api/batches', {
+    const res = await fetch('/api/batches', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -227,6 +232,11 @@ export default function PlannerPage() {
         local_target_time: newTime,
       }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || `Failed to update batch (${res.status})`, 'error');
+      return;
+    }
     setEditingBatch(null);
     await fetchAll();
     showToast('Batch updated', 'info');
@@ -235,7 +245,7 @@ export default function PlannerPage() {
   const duplicateBatch = async (batch: PlannerBatch, idx: number) => {
     const currentIdx = weekDates.indexOf(batch.planned_date);
     const nextDate = weekDates[Math.min(currentIdx + 1, 6)];
-    await fetch('/api/batches', {
+    const res = await fetch('/api/batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -247,6 +257,7 @@ export default function PlannerPage() {
         planned_date: nextDate,
       }),
     });
+    if (!res.ok) { showToast('Failed to duplicate batch', 'error'); return; }
     await fetchAll();
     const nextDayName = new Date(nextDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
     showToast(`✅ Batch duplicated → ${nextDayName}`, 'success');
@@ -258,7 +269,7 @@ export default function PlannerPage() {
     const convRate = parseFloat(completeForm.conversion_rate) || 0;
     const replyCount = Math.round(completingBatch.message_count * (convRate / 100) * 10) / 10;
     const actualTime = `${String(completeForm.actual_send_hour).padStart(2, '0')}:00`;
-    await fetch('/api/batches', {
+    const res = await fetch('/api/batches', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -269,6 +280,11 @@ export default function PlannerPage() {
         reply_count: replyCount,
       }),
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || `Failed to mark done (${res.status})`, 'error');
+      return;
+    }
     const batchRef = completingBatch;
     setCompletingBatch(null);
     setCompleteForm({ lc_batch_id: '', actual_send_hour: 8, conversion_rate: '' });
@@ -281,21 +297,23 @@ export default function PlannerPage() {
   };
 
   const markSkipped = async (batch: PlannerBatch) => {
-    await fetch('/api/batches', {
+    const res = await fetch('/api/batches', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: batch.id, skipped: 1 }),
     });
+    if (!res.ok) { showToast('Failed to skip batch', 'error'); return; }
     await fetchAll();
     showToast(`Batch #${batch.batch_number} marked as skipped`, 'info');
   };
 
   const unmarkSkipped = async (batch: PlannerBatch) => {
-    await fetch('/api/batches', {
+    const res = await fetch('/api/batches', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: batch.id, skipped: 0 }),
     });
+    if (!res.ok) { showToast('Failed to restore batch', 'error'); return; }
     await fetchAll();
     showToast(`Batch #${batch.batch_number} restored`, 'success');
   };
@@ -427,7 +445,7 @@ export default function PlannerPage() {
       <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
         {toasts.map(t => (
           <div key={t.id} className={`px-4 py-3 rounded-xl shadow-lg text-sm font-body font-medium flex items-center gap-2 pointer-events-auto animate-fade-in ${
-            t.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-brand-pine text-white'
+            t.type === 'success' ? 'bg-emerald-600 text-white' : t.type === 'error' ? 'bg-red-600 text-white' : 'bg-brand-pine text-white'
           }`}>
             {t.message}
           </div>
